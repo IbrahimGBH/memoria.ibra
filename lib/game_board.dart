@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart'; // Importante para guardar
 
 class GameBoard extends StatefulWidget {
   const GameBoard({super.key});
@@ -9,107 +10,114 @@ class GameBoard extends StatefulWidget {
 }
 
 class _GameBoardState extends State<GameBoard> {
-  // Configuración del juego: 6x6 = 36 cartas (18 pares)
-  final int rows = 6;
-  final int cols = 6;
   
-  // Variables de estado
-  late List<String> cardContent;     // El contenido (emojis)
-  late List<bool> cardFlipped;       // Si la carta está volteada
-  late List<bool> cardMatched;       // Si ya se encontró la pareja
-  int? firstFlippedIndex;            // Índice de la primera carta volteada
-  bool isProcessing = false;         // Para evitar toques rápidos
-  int attempts = 0;                  // Contador de intentos
-
-  // Lista de emojis para usar como cartas (18 emojis para 18 pares)
-  final List<String> iconsSource = [
-    '🐶', '🐱', '🐭', '🐹', '🐰', '🦊', 
-    '🐻', '🐼', '🐨', '🐯', '🦁', 'dV',
-    '🐸', '🐵', '🐔', '🐧', '🐦', '🐤'
+  final List<String> _emojis = [
+    '🦁', '🦁', '🦊', '🦊', '🐼', '🐼', '🐨', '🐨', '🐯', '🐯',
+    '🐸', '🐸', '🐙', '🐙', '🦄', '🦄', '🐷', '🐷', '🐵', '🐵',
+    '🦉', '🦉', '🐧', '🐧', '🐥', '🐥', '🐝', '🐝', '🦋', '🦋',
+    '🐞', '🐞', '🐠', '🐠', '🦖', '🦖' 
   ];
+  
+  List<String> _gameCards = [];
+  List<bool> _cardFlipped = [];
+  List<int> _selectedIndices = [];
+  int _attempts = 0;
+  int _bestScore = 0; 
 
   @override
   void initState() {
     super.initState();
-    startNewGame();
+    _loadBestScore(); // Cargar récord al iniciar
+    _resetGame();
   }
 
-  void startNewGame() {
-    // 1. Crear pares y barajar
-    List<String> cards = [...iconsSource, ...iconsSource]; // Duplicar
-    cards.shuffle(); // Barajar aleatoriamente
-
+  // Cargar el récord guardado en el celular
+  Future<void> _loadBestScore() async {
+    final prefs = await SharedPreferences.getInstance();
     setState(() {
-      cardContent = cards;
-      // Inicializar todas las cartas como "no volteadas" y "no emparejadas"
-      cardFlipped = List.generate(36, (index) => false);
-      cardMatched = List.generate(36, (index) => false);
-      firstFlippedIndex = null;
-      isProcessing = false;
-      attempts = 0;
+      _bestScore = prefs.getInt('best_score') ?? 0;
     });
   }
 
-  void onCardTap(int index) {
-    // Bloqueos de seguridad:
-    // Si ya está procesando, si la carta ya está volteada o si ya está emparejada, no hacer nada.
-    if (isProcessing || cardFlipped[index] || cardMatched[index]) return;
+  // Guardar nuevo récord si es necesario
+  Future<void> _updateBestScore(int score) async {
+    final prefs = await SharedPreferences.getInstance();
+    // Si es el primer juego (0) o si superó el récord (menos intentos es mejor)
+    if (_bestScore == 0 || score < _bestScore) {
+      await prefs.setInt('best_score', score);
+      setState(() {
+        _bestScore = score;
+      });
+    }
+  }
+
+  void _resetGame() {
+    setState(() {
+      _attempts = 0;
+      _gameCards = List.from(_emojis);
+      _gameCards.shuffle();
+      _cardFlipped = List.generate(_gameCards.length, (index) => false);
+      _selectedIndices = [];
+    });
+  }
+
+  void _onCardTap(int index) {
+    if (_cardFlipped[index] || _selectedIndices.length >= 2) return;
 
     setState(() {
-      cardFlipped[index] = true; // Voltear la carta actual
+      _cardFlipped[index] = true;
+      _selectedIndices.add(index);
     });
 
-    if (firstFlippedIndex == null) {
-      // Es la primera carta del par
-      firstFlippedIndex = index;
-    } else {
-      // Es la segunda carta: comparar
-      int firstIndex = firstFlippedIndex!;
-      attempts++; // Contar el intento
+    if (_selectedIndices.length == 2) {
+      _checkMatch();
+    }
+  }
 
-      if (cardContent[firstIndex] == cardContent[index]) {
-        // ¡Coincidencia!
-        setState(() {
-          cardMatched[firstIndex] = true;
-          cardMatched[index] = true;
-          firstFlippedIndex = null;
-        });
-        checkWinCondition();
-      } else {
-        // No coinciden: Esperar un momento y voltear ambas
-        isProcessing = true;
-        Timer(const Duration(milliseconds: 1000), () {
-          setState(() {
-            cardFlipped[firstIndex] = false;
-            cardFlipped[index] = false;
-            firstFlippedIndex = null;
-            isProcessing = false;
-          });
-        });
+  void _checkMatch() {
+    setState(() {
+      _attempts++;
+    });
+
+    int index1 = _selectedIndices[0];
+    int index2 = _selectedIndices[1];
+
+    if (_gameCards[index1] == _gameCards[index2]) {
+      _selectedIndices.clear();
+      
+      // Verificar victoria
+      if (_cardFlipped.every((bool status) => status == true)) {
+        _updateBestScore(_attempts); // Guardar récord al ganar
+        _showWinDialog();
       }
+    } else {
+      Timer(const Duration(milliseconds: 1000), () {
+        setState(() {
+          _cardFlipped[index1] = false;
+          _cardFlipped[index2] = false;
+          _selectedIndices.clear();
+        });
+      });
     }
   }
 
-  void checkWinCondition() {
-    // Si todas las cartas están emparejadas, ganaste
-    if (cardMatched.every((element) => element)) {
-      showDialog(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('¡Felicidades! 🎉'),
-          content: Text('Ganaste en $attempts intentos.'),
-          actions: [
-            TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                startNewGame();
-              },
-              child: const Text('Jugar de nuevo'),
-            )
-          ],
-        ),
-      );
-    }
+  void _showWinDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('¡Ganaste! 🎉'),
+        content: Text('Intentos: $_attempts\nMejor Récord: $_bestScore'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _resetGame();
+            },
+            child: const Text('Jugar otra vez'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -121,40 +129,46 @@ class _GameBoardState extends State<GameBoard> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Intentos: $attempts', style: const TextStyle(fontSize: 20)),
+              // Panel de info actualizado
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Intentos: $_attempts', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  Text('Récord: ${_bestScore == 0 ? '--' : _bestScore}', 
+                       style: TextStyle(fontSize: 16, color: Colors.grey[700])),
+                ],
+              ),
               ElevatedButton.icon(
-                onPressed: startNewGame,
+                onPressed: _resetGame,
                 icon: const Icon(Icons.refresh),
                 label: const Text('Reiniciar'),
               ),
             ],
           ),
         ),
+        
         Expanded(
           child: GridView.builder(
             padding: const EdgeInsets.all(10),
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: rows, // 6 columnas
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 6, // ¡IMPORTANTE! 6 Columnas para cumplir requisito
               crossAxisSpacing: 8,
               mainAxisSpacing: 8,
             ),
-            itemCount: rows * cols,
+            itemCount: _gameCards.length,
             itemBuilder: (context, index) {
               return GestureDetector(
-                onTap: () => onCardTap(index),
+                onTap: () => _onCardTap(index),
                 child: Container(
                   decoration: BoxDecoration(
-                    color: cardFlipped[index] || cardMatched[index] 
-                        ? Colors.blue 
-                        : Colors.grey,
-                    borderRadius: BorderRadius.circular(8),
+                    color: _cardFlipped[index] ? Colors.white : Colors.deepPurple,
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(color: Colors.black12),
                   ),
                   child: Center(
                     child: Text(
-                      cardFlipped[index] || cardMatched[index] 
-                          ? cardContent[index] 
-                          : '',
-                      style: const TextStyle(fontSize: 32),
+                      _cardFlipped[index] ? _gameCards[index] : '❓',
+                      style: const TextStyle(fontSize: 24), // Emoji un poco más pequeño para que quepa
                     ),
                   ),
                 ),
